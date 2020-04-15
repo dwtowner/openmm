@@ -51,13 +51,7 @@ protected:
          --------------------------------------------------------------------------------------- */
           
       void calculateBlockIxn(int blockIndex, float* forces, double* totalEnergy, const fvec4& boxSize, const fvec4& invBoxSize);
-      
-      /**
-       * Templatized implementation of calculateBlockIxn.
-       */
-      template <int PERIODIC_TYPE>
-      void calculateBlockIxnImpl(int blockIndex, float* forces, double* totalEnergy, const fvec4& boxSize, const fvec4& invBoxSize, const fvec4& blockCenter);
-            
+
       /**---------------------------------------------------------------------------------------
       
          Calculate all the interactions for one atom block.
@@ -71,10 +65,11 @@ protected:
       void calculateBlockEwaldIxn(int blockIndex, float* forces, double* totalEnergy, const fvec4& boxSize, const fvec4& invBoxSize);
 
       /**
-       * Templatized implementation of calculateBlockEwaldIxn.
+       * Templatized implementation of calculateBlockIxn. It can handle both Ewald and non-ewald interactions
+       * through a template parameter, since the code is so similar for the two cases.
        */
-      template <int PERIODIC_TYPE>
-      void calculateBlockEwaldIxnImpl(int blockIndex, float* forces, double* totalEnergy, const fvec4& boxSize, const fvec4& invBoxSize, const fvec4& blockCenter);
+      template <int PERIODIC_TYPE, bool IS_EWALD>
+      void calculateBlockIxnImpl(int blockIndex, float* forces, double* totalEnergy, const fvec4& boxSize, const fvec4& invBoxSize, const fvec4& blockCenter);
 
       /**
        * Compute the displacement and squared distance between a collection of points, optionally using

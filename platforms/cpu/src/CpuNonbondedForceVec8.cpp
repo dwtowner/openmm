@@ -24,10 +24,8 @@
 
 #include "SimTKOpenMMUtilities.h"
 #include "CpuNonbondedForceVec8.h"
-#include "openmm/OpenMMException.h"
-#include "openmm/internal/hardware.h"
+
 #include <algorithm>
-#include <iostream>
 
 using namespace std;
 using namespace OpenMM;
@@ -135,126 +133,16 @@ void CpuNonbondedForceVec8::calculateBlockIxn(int blockIndex, float* forces, dou
     }
     
     // Call the appropriate version depending on what calculation is required for periodic boundary conditions.
-    
+    // :TODO: Make this function universal too.
     if (periodicType == NoPeriodic)
-        calculateBlockIxnImpl<NoPeriodic>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
+        calculateBlockIxnImpl<NoPeriodic, false>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
     else if (periodicType == PeriodicPerAtom)
-        calculateBlockIxnImpl<PeriodicPerAtom>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
+        calculateBlockIxnImpl<PeriodicPerAtom, false>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
     else if (periodicType == PeriodicPerInteraction)
-        calculateBlockIxnImpl<PeriodicPerInteraction>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
+        calculateBlockIxnImpl<PeriodicPerInteraction, false>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
     else if (periodicType == PeriodicTriclinic)
-        calculateBlockIxnImpl<PeriodicTriclinic>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
+        calculateBlockIxnImpl<PeriodicTriclinic,false>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
 }
-
-template <int PERIODIC_TYPE>
-void CpuNonbondedForceVec8::calculateBlockIxnImpl(int blockIndex, float* forces, double* totalEnergy, const fvec4& boxSize, const fvec4& invBoxSize, const fvec4& blockCenter) {
-    // Load the positions and parameters of the atoms in the block.
-    
-    const int* blockAtom = &neighborList->getSortedAtoms()[8*blockIndex];
-    fvec4 blockAtomPosq[8];
-    fvec8 blockAtomForceX(0.0f), blockAtomForceY(0.0f), blockAtomForceZ(0.0f);
-    fvec8 blockAtomX, blockAtomY, blockAtomZ, blockAtomCharge;
-    for (int i = 0; i < 8; i++) {
-        blockAtomPosq[i] = fvec4(posq+4*blockAtom[i]);
-        if (PERIODIC_TYPE == PeriodicPerAtom)
-            blockAtomPosq[i] -= floor((blockAtomPosq[i]-blockCenter)*invBoxSize+0.5f)*boxSize;
-    }
-    transpose(blockAtomPosq[0], blockAtomPosq[1], blockAtomPosq[2], blockAtomPosq[3], blockAtomPosq[4], blockAtomPosq[5], blockAtomPosq[6], blockAtomPosq[7], blockAtomX, blockAtomY, blockAtomZ, blockAtomCharge);
-    blockAtomCharge *= ONE_4PI_EPS0;
-    fvec8 blockAtomSigma(atomParameters[blockAtom[0]].first, atomParameters[blockAtom[1]].first, atomParameters[blockAtom[2]].first, atomParameters[blockAtom[3]].first, atomParameters[blockAtom[4]].first, atomParameters[blockAtom[5]].first, atomParameters[blockAtom[6]].first, atomParameters[blockAtom[7]].first);
-    fvec8 blockAtomEpsilon(atomParameters[blockAtom[0]].second, atomParameters[blockAtom[1]].second, atomParameters[blockAtom[2]].second, atomParameters[blockAtom[3]].second, atomParameters[blockAtom[4]].second, atomParameters[blockAtom[5]].second, atomParameters[blockAtom[6]].second, atomParameters[blockAtom[7]].second);
-    const bool needPeriodic = (PERIODIC_TYPE == PeriodicPerInteraction || PERIODIC_TYPE == PeriodicTriclinic);
-    const float invSwitchingInterval = 1/(cutoffDistance-switchingDistance);
-    const fvec8 cutoffDistanceSquared = cutoffDistance * cutoffDistance;
-
-    // Loop over neighbors for this block.
-    
-    const vector<int>& neighbors = neighborList->getBlockNeighbors(blockIndex);
-    const vector<char>& exclusions = neighborList->getBlockExclusions(blockIndex);
-    for (int i = 0; i < (int) neighbors.size(); i++) {
-        // Load the next neighbor.
-        
-        int atom = neighbors[i];
-        
-        // Compute the distances to the block atoms.
-        
-        fvec8 dx, dy, dz, r2;
-        fvec4 atomPos(posq+4*atom);
-        if (PERIODIC_TYPE == PeriodicPerAtom)
-            atomPos -= floor((atomPos-blockCenter)*invBoxSize+0.5f)*boxSize;
-        getDeltaR<PERIODIC_TYPE>(atomPos, blockAtomX, blockAtomY, blockAtomZ, dx, dy, dz, r2, needPeriodic, boxSize, invBoxSize);
-
-        const int8_t include = ~exclusions[i] & getMaskFromCompare(r2 < cutoffDistanceSquared);
-        if (include == 0)
-            continue;
-
-        // Compute the interactions.
-        
-        fvec8 inverseR = rsqrt(r2);
-        fvec8 energy, dEdR;
-        float atomEpsilon = atomParameters[atom].second;
-        if (atomEpsilon != 0.0f) {
-            fvec8 sig = blockAtomSigma+atomParameters[atom].first;
-            fvec8 sig2 = inverseR*sig;
-            sig2 *= sig2;
-            fvec8 sig6 = sig2*sig2*sig2;
-            fvec8 epsSig6 = blockAtomEpsilon*atomEpsilon*sig6;
-            dEdR = epsSig6*(12.0f*sig6 - 6.0f);
-            energy = epsSig6*(sig6-1.0f);
-            if (useSwitch) {
-                fvec8 r = r2*inverseR;
-                fvec8 t = (r>switchingDistance) & ((r-switchingDistance)*invSwitchingInterval);
-                fvec8 switchValue = 1+t*t*t*(-10.0f+t*(15.0f-t*6.0f));
-                fvec8 switchDeriv = t*t*(-30.0f+t*(60.0f-t*30.0f))*invSwitchingInterval;
-                dEdR = switchValue*dEdR - energy*switchDeriv*r;
-                energy *= switchValue;
-            }
-        }
-        else {
-            energy = 0.0f;
-            dEdR = 0.0f;
-        }
-        fvec8 chargeProd = blockAtomCharge*posq[4*atom+3];
-        if (cutoff)
-            dEdR += chargeProd*(inverseR-2.0f*krf*r2);
-        else
-            dEdR += chargeProd*inverseR;
-        dEdR *= inverseR*inverseR;
-
-        // Accumulate energies.
-
-        fvec8 one(1.0f);
-        if (totalEnergy) {
-            if (cutoff)
-                energy += chargeProd*(inverseR+krf*r2-crf);
-            else
-                energy += chargeProd*inverseR;
-            energy = blend(0.0f, energy, include);
-            *totalEnergy += dot8(energy, one);
-        }
-
-        // Accumulate forces.
-
-        dEdR = blend(0.0f, dEdR, include);
-        fvec8 fx = dx*dEdR;
-        fvec8 fy = dy*dEdR;
-        fvec8 fz = dz*dEdR;
-        blockAtomForceX += fx;
-        blockAtomForceY += fy;
-        blockAtomForceZ += fz;
-
-        float* atomForce = forces+4*atom;
-        const fvec4 newAtomForce = fvec4(atomForce) - reduceToVec3(fx, fy, fz);
-        _mm_maskstore_ps(atomForce, _mm_setr_epi32(-1, -1, -1, 0), newAtomForce);
-    }
-    
-    // Record the forces on the block atoms.
-
-    fvec4 f[8];
-    transpose(blockAtomForceX, blockAtomForceY, blockAtomForceZ, 0.0f, f[0], f[1], f[2], f[3], f[4], f[5], f[6], f[7]);
-    for (int j = 0; j < 8; j++)
-        (fvec4(forces+4*blockAtom[j])+f[j]).store(forces+4*blockAtom[j]);
-  }
 
 void CpuNonbondedForceVec8::calculateBlockEwaldIxn(int blockIndex, float* forces, double* totalEnergy, const fvec4& boxSize, const fvec4& invBoxSize) {
     // Determine whether we need to apply periodic boundary conditions.
@@ -296,17 +184,17 @@ void CpuNonbondedForceVec8::calculateBlockEwaldIxn(int blockIndex, float* forces
     // Call the appropriate version depending on what calculation is required for periodic boundary conditions.
     
     if (periodicType == NoPeriodic)
-        calculateBlockEwaldIxnImpl<NoPeriodic>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
+        calculateBlockIxnImpl<NoPeriodic, true>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
     else if (periodicType == PeriodicPerAtom)
-        calculateBlockEwaldIxnImpl<PeriodicPerAtom>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
+        calculateBlockIxnImpl<PeriodicPerAtom, true>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
     else if (periodicType == PeriodicPerInteraction)
-        calculateBlockEwaldIxnImpl<PeriodicPerInteraction>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
+        calculateBlockIxnImpl<PeriodicPerInteraction, true>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
     else if (periodicType == PeriodicTriclinic)
-        calculateBlockEwaldIxnImpl<PeriodicTriclinic>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
+        calculateBlockIxnImpl<PeriodicTriclinic, true>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
 }
 
-template <int PERIODIC_TYPE>
-void CpuNonbondedForceVec8::calculateBlockEwaldIxnImpl(int blockIndex, float* forces, double* totalEnergy, const fvec4& boxSize, const fvec4& invBoxSize, const fvec4& blockCenter) {
+template <int PERIODIC_TYPE, bool IS_EWALD>
+void CpuNonbondedForceVec8::calculateBlockIxnImpl(int blockIndex, float* forces, double* totalEnergy, const fvec4& boxSize, const fvec4& invBoxSize, const fvec4& blockCenter) {
     // Load the positions and parameters of the atoms in the block.
     
     const int* blockAtom = &neighborList->getSortedAtoms()[8*blockIndex];
@@ -320,12 +208,18 @@ void CpuNonbondedForceVec8::calculateBlockEwaldIxnImpl(int blockIndex, float* fo
     }
     transpose(blockAtomPosq[0], blockAtomPosq[1], blockAtomPosq[2], blockAtomPosq[3], blockAtomPosq[4], blockAtomPosq[5], blockAtomPosq[6], blockAtomPosq[7], blockAtomX, blockAtomY, blockAtomZ, blockAtomCharge);
     blockAtomCharge *= ONE_4PI_EPS0;
+    // :TODO: Use gather. Use pair-wise gather perhaps?
     fvec8 blockAtomSigma(atomParameters[blockAtom[0]].first, atomParameters[blockAtom[1]].first, atomParameters[blockAtom[2]].first, atomParameters[blockAtom[3]].first, atomParameters[blockAtom[4]].first, atomParameters[blockAtom[5]].first, atomParameters[blockAtom[6]].first, atomParameters[blockAtom[7]].first);
     fvec8 blockAtomEpsilon(atomParameters[blockAtom[0]].second, atomParameters[blockAtom[1]].second, atomParameters[blockAtom[2]].second, atomParameters[blockAtom[3]].second, atomParameters[blockAtom[4]].second, atomParameters[blockAtom[5]].second, atomParameters[blockAtom[6]].second, atomParameters[blockAtom[7]].second);
-    fvec8 C6s(C6params[blockAtom[0]], C6params[blockAtom[1]], C6params[blockAtom[2]], C6params[blockAtom[3]], C6params[blockAtom[4]], C6params[blockAtom[5]], C6params[blockAtom[6]], C6params[blockAtom[7]]);
     const bool needPeriodic = (PERIODIC_TYPE == PeriodicPerInteraction || PERIODIC_TYPE == PeriodicTriclinic);
     const float invSwitchingInterval = 1/(cutoffDistance-switchingDistance);
     const fvec8 cutoffDistanceSquared = cutoffDistance * cutoffDistance;
+
+    // :TODO: Use gather utility.
+    const fvec8 C6s =
+      IS_EWALD
+      ? (C6params[blockAtom[0]], C6params[blockAtom[1]], C6params[blockAtom[2]], C6params[blockAtom[3]], C6params[blockAtom[4]], C6params[blockAtom[5]], C6params[blockAtom[6]], C6params[blockAtom[7]])
+      : fvec8();
 
     // Loop over neighbors for this block.
     
@@ -370,7 +264,7 @@ void CpuNonbondedForceVec8::calculateBlockEwaldIxnImpl(int blockIndex, float* fo
                 dEdR = switchValue*dEdR - energy*switchDeriv*r;
                 energy *= switchValue;
             }
-            if (ljpme) {
+            if (IS_EWALD && ljpme) {
                 fvec8 C6ij = C6s*C6params[atom];
                 fvec8 inverseR2 = inverseR*inverseR;
                 fvec8 mysig2 = sig*sig;
@@ -380,21 +274,38 @@ void CpuNonbondedForceVec8::calculateBlockEwaldIxnImpl(int blockIndex, float* fo
                 dEdR += 6.0f*C6ij*inverseR2*inverseR2*inverseR2*approximateFunctionFromTable(dExptermsTable, r, exptermsDXInv);
                 energy += emult + potentialShift;
             }
-
         }
         else {
             energy = 0.0f;
             dEdR = 0.0f;
         }
         fvec8 chargeProd = blockAtomCharge*posq[4*atom+3];
-        dEdR += chargeProd*inverseR*approximateFunctionFromTable(ewaldScaleTable, r, ewaldDXInv);
+        if (IS_EWALD)
+            dEdR += chargeProd*inverseR*approximateFunctionFromTable(ewaldScaleTable, r, ewaldDXInv);
+        else
+        {
+            if (cutoff)
+                dEdR += chargeProd*(inverseR-2.0f*krf*r2);
+            else
+                dEdR += chargeProd*inverseR;
+        }
         dEdR *= inverseR*inverseR;
 
         // Accumulate energies.
 
         fvec8 one(1.0f);
         if (totalEnergy) {
-            energy += chargeProd*inverseR*approximateFunctionFromTable(erfcTable, alphaEwald*r, erfcDXInv);
+            if (IS_EWALD)
+            {
+                energy += chargeProd*inverseR*approximateFunctionFromTable(erfcTable, alphaEwald*r, erfcDXInv);
+            }
+            else
+            {
+                if (cutoff)
+                    energy += chargeProd*(inverseR+krf*r2-crf);
+                else
+                    energy += chargeProd*inverseR;
+            }
             energy = blend(0.0f, energy, include);
             *totalEnergy += dot8(energy, one);
         }
