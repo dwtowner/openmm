@@ -42,31 +42,30 @@ public:
 protected:            
       /**---------------------------------------------------------------------------------------
       
-         Calculate all the interactions for one atom block.
+         Calculate all the interactions for one atom block. These are part of the virtual function interface.
+         They internally call into  the generic handler function below.
       
          @param blockIndex       the index of the atom block
          @param forces           force array (forces added)
          @param totalEnergy      total energy
             
          --------------------------------------------------------------------------------------- */
-          
+      ///@{    
       void calculateBlockIxn(int blockIndex, float* forces, double* totalEnergy, const fvec4& boxSize, const fvec4& invBoxSize);
+      void calculateBlockEwaldIxn(int blockIndex, float* forces, double* totalEnergy, const fvec4& boxSize, const fvec4& invBoxSize);
+      ///@}
 
       /**---------------------------------------------------------------------------------------
       
-         Calculate all the interactions for one atom block.
-      
-         @param blockIndex       the index of the atom block
-         @param forces           force array (forces added)
-         @param totalEnergy      total energy
-            
+         Calculate all the interactions for one atom block. Identical to function prototypes above but
+         with an extra template parameter to choose whether to use Ewald processing or not.
          --------------------------------------------------------------------------------------- */
-          
-      void calculateBlockEwaldIxn(int blockIndex, float* forces, double* totalEnergy, const fvec4& boxSize, const fvec4& invBoxSize);
-
+      template<bool IS_EWALD>
+      void calculateBlockIxnHandler(int blockIndex, float* forces, double* totalEnergy, const fvec4& boxSize, const fvec4& invBoxSize);
+      
       /**
        * Templatized implementation of calculateBlockIxn. It can handle both Ewald and non-ewald interactions
-       * through a template parameter, since the code is so similar for the two cases.
+       * through a template parameter since the code is so similar for the two cases.
        */
       template <int PERIODIC_TYPE, bool IS_EWALD>
       void calculateBlockIxnImpl(int blockIndex, float* forces, double* totalEnergy, const fvec4& boxSize, const fvec4& invBoxSize, const fvec4& blockCenter);

@@ -96,55 +96,19 @@ CpuNonbondedForceVec8::CpuNonbondedForceVec8() {
 
 enum PeriodicType {NoPeriodic, PeriodicPerAtom, PeriodicPerInteraction, PeriodicTriclinic};
 
-void CpuNonbondedForceVec8::calculateBlockIxn(int blockIndex, float* forces, double* totalEnergy, const fvec4& boxSize, const fvec4& invBoxSize) {
-    // Determine whether we need to apply periodic boundary conditions.    
-    PeriodicType periodicType;
-    fvec4 blockCenter;
-    if (!periodic) {
-        periodicType = NoPeriodic;
-        blockCenter = 0.0f;
-    }
-    else {
-        const int* blockAtom = &neighborList->getSortedAtoms()[8*blockIndex];
-        float minx, maxx, miny, maxy, minz, maxz;
-        minx = maxx = posq[4*blockAtom[0]];
-        miny = maxy = posq[4*blockAtom[0]+1];
-        minz = maxz = posq[4*blockAtom[0]+2];
-        for (int i = 1; i < 8; i++) {
-            minx = min(minx, posq[4*blockAtom[i]]);
-            maxx = max(maxx, posq[4*blockAtom[i]]);
-            miny = min(miny, posq[4*blockAtom[i]+1]);
-            maxy = max(maxy, posq[4*blockAtom[i]+1]);
-            minz = min(minz, posq[4*blockAtom[i]+2]);
-            maxz = max(maxz, posq[4*blockAtom[i]+2]);
-        }
-        blockCenter = fvec4(0.5f*(minx+maxx), 0.5f*(miny+maxy), 0.5f*(minz+maxz), 0.0f);
-        if (!(minx < cutoffDistance || miny < cutoffDistance || minz < cutoffDistance ||
-                maxx > boxSize[0]-cutoffDistance || maxy > boxSize[1]-cutoffDistance || maxz > boxSize[2]-cutoffDistance))
-            periodicType = NoPeriodic;
-        else if (triclinic)
-            periodicType = PeriodicTriclinic;
-        else if (0.5f*(boxSize[0]-(maxx-minx)) >= cutoffDistance &&
-                 0.5f*(boxSize[1]-(maxy-miny)) >= cutoffDistance &&
-                 0.5f*(boxSize[2]-(maxz-minz)) >= cutoffDistance)
-            periodicType = PeriodicPerAtom;
-        else
-            periodicType = PeriodicPerInteraction;
-    }
-    
-    // Call the appropriate version depending on what calculation is required for periodic boundary conditions.
-    // :TODO: Make this function universal too.
-    if (periodicType == NoPeriodic)
-        calculateBlockIxnImpl<NoPeriodic, false>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
-    else if (periodicType == PeriodicPerAtom)
-        calculateBlockIxnImpl<PeriodicPerAtom, false>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
-    else if (periodicType == PeriodicPerInteraction)
-        calculateBlockIxnImpl<PeriodicPerInteraction, false>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
-    else if (periodicType == PeriodicTriclinic)
-        calculateBlockIxnImpl<PeriodicTriclinic,false>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
+void CpuNonbondedForceVec8::calculateBlockIxn(int blockIndex, float* forces, double* totalEnergy, const fvec4& boxSize, const fvec4& invBoxSize)
+{
+    calculateBlockIxnHandler<false>(blockIndex, forces, totalEnergy, boxSize, invBoxSize);
 }
 
-void CpuNonbondedForceVec8::calculateBlockEwaldIxn(int blockIndex, float* forces, double* totalEnergy, const fvec4& boxSize, const fvec4& invBoxSize) {
+void CpuNonbondedForceVec8::calculateBlockEwaldIxn(int blockIndex, float* forces, double* totalEnergy, const fvec4& boxSize, const fvec4& invBoxSize)
+{
+    calculateBlockIxnHandler<true>(blockIndex, forces, totalEnergy, boxSize, invBoxSize);
+}
+
+template<bool IS_EWALD>
+void CpuNonbondedForceVec8::calculateBlockIxnHandler(int blockIndex, float* forces, double* totalEnergy, const fvec4& boxSize, const fvec4& invBoxSize)
+{
     // Determine whether we need to apply periodic boundary conditions.
     
     PeriodicType periodicType;
@@ -184,13 +148,13 @@ void CpuNonbondedForceVec8::calculateBlockEwaldIxn(int blockIndex, float* forces
     // Call the appropriate version depending on what calculation is required for periodic boundary conditions.
     
     if (periodicType == NoPeriodic)
-        calculateBlockIxnImpl<NoPeriodic, true>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
+        calculateBlockIxnImpl<NoPeriodic, IS_EWALD>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
     else if (periodicType == PeriodicPerAtom)
-        calculateBlockIxnImpl<PeriodicPerAtom, true>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
+        calculateBlockIxnImpl<PeriodicPerAtom, IS_EWALD>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
     else if (periodicType == PeriodicPerInteraction)
-        calculateBlockIxnImpl<PeriodicPerInteraction, true>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
+        calculateBlockIxnImpl<PeriodicPerInteraction, IS_EWALD>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
     else if (periodicType == PeriodicTriclinic)
-        calculateBlockIxnImpl<PeriodicTriclinic, true>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
+        calculateBlockIxnImpl<PeriodicTriclinic, IS_EWALD>(blockIndex, forces, totalEnergy, boxSize, invBoxSize, blockCenter);
 }
 
 template <int PERIODIC_TYPE, bool IS_EWALD>
